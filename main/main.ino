@@ -9,10 +9,10 @@
 const String url = "/trigger/"+trigger+"/with/key/"+key;
 
 
-int mail_to_send = 0;
-unsigned long time_since_last_mail = 0;
+int nbr_of_letters = 0;
+unsigned long time_since_last_letter = 0;
 
-double moyenne_distance = 0;
+double previous_distance= 0;
 
 
 void setup() {
@@ -24,26 +24,27 @@ void setup() {
 
 void loop() {
   
-  Serial.println(mesureDistance());
-  if (isNewObjectDetected()){
-    mail_to_send ++;
+  if (isNewObjectDetected() && (millis()-time_since_last_letter) > time_between_two_letters_are_detected){
+    nbr_of_letters ++;
   }
 
-  delay(250);
+  delay(time_between_two_measurements);
 
-  if (mail_to_send > 0){
-    Serial.print(mail_to_send);
-    Serial.println(" mail will be sent");
+  if (nbr_of_letters > 0){
+    Serial.print(" Weebhook will be triggered in ");
+    Serial.print(int(millis()-time_since_last_letter));
+    Serial.print("s, ");
+    Serial.print(nbr_of_letters);
+    Serial.println(" letter(s) detected");
   }
   
-  while (mail_to_send >0 && (millis()-time_since_last_mail)>15000 ){
-    Serial.println(millis());
-    Serial.println(time_since_last_mail);
+  while (nbr_of_letters >0 && (millis()-time_since_last_letter)>time_before_weebhook_is_triggered*1000 ){
+    Serial.println("Starting weebhook triggering");
     if (sendIFTTTRequest()){
-      Serial.println("mail sent");
-      mail_to_send --;
+      Serial.println("Weebhook triggered");
+      nbr_of_letters --;
     } else {
-       Serial.println("failed to send mail, retrying in 2s");
+       Serial.println("Failed to trigger weebhook, retrying in 2s");
     }
     delay(2000);
   }
@@ -63,13 +64,13 @@ bool sendIFTTTRequest(){
 
   client.setInsecure();
 
-  Serial.print("connecting to ");
+  Serial.print("Connecting to ");
   Serial.println(host);
 
   int connect_code = client.connect(host, httpsPort);
   Serial.println(connect_code);
   if (!connect_code) {
-    Serial.println("connection failed");
+    Serial.println("Connection failed");
     closeConnection(client);
     return false;
   }
@@ -84,7 +85,7 @@ bool sendIFTTTRequest(){
                "Connection: close\r\n\r\n");
   delay(500);
 
-  if (mail_to_send == 1){
+  if (nbr_of_letters == 1){
     closeConnection(client);
   }
   return true;
@@ -105,7 +106,7 @@ bool connectWifi(){
     stationConf.bssid_set = 0;  //need not check MAC address of AP
     char char_ssid[32] = "";
     char char_password[64] = "";
-    myssid.toCharArray(char_ssid,32);
+    ssid.toCharArray(char_ssid,32);
     password.toCharArray(char_password,64);
     memcpy(&stationConf.ssid, char_ssid, os_strlen(char_ssid));
     memcpy(&stationConf.password, char_password, os_strlen(char_password));
@@ -139,23 +140,23 @@ bool connectWifi(){
   
   } else {
     wifi_station_set_wpa2_enterprise_auth(0);
-    WiFi.begin(myssid,password);
+    WiFi.begin(ssid,password);
   }
   
   int cpt = 0;
+  Serial.print("Connecting  to Wifi");
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
     Serial.print(".");
     cpt ++;
     if (cpt >100){
-      Serial.println("could not connect to wifi");
+      Serial.println("Could not connect to Wifi");
       WiFi.disconnect();
       return false;
     }
   }
-  Serial.println("");
   Serial.println("WiFi connected");  
-  Serial.println("IP address: ");
+  Serial.print("IP address: ");
   Serial.println(WiFi.localIP());
   Serial.print("Netmask: ");
   Serial.println(WiFi.subnetMask());
@@ -167,31 +168,51 @@ bool connectWifi(){
 void closeConnection(WiFiClientSecure myClient){
   myClient.stop();
   WiFi.disconnect();
+  Serial.println("Wifi connection closed");
 }
 
 
 
 bool isNewObjectDetected(){
   double distance = mesureDistance();
-  double moyenne_distance_temp = moyenne_distance;
+  Serial.print("Measured distance is : ");
+  Serial.print(distance);
+  Serial.println(" cm");
+  Serial.print("Measured distance was : ");
+  Serial.print(previous_distance);
+  Serial.println(" cm");
+  double moyenne_distance = previous_distance;
+  //double last_10_distances[10];
   int nbr_mesure = 1;
-  while (distance > moyenne_distance_temp*1.03 || distance < moyenne_distance_temp*0.97){
-    moyenne_distance_temp = moyenne_distance_temp*0.9 + distance*0.1;
+  if (distance > moyenne_distance*1.03 || distance < moyenne_distance*0.97){
+    Serial.print("Measured distance is too far from previous distance, more measurments will be done");
+  }
+  while (distance > moyenne_distance*1.03 || distance < moyenne_distance*0.97){
+    moyenne_distance = moyenne_distance*0.9 + distance*0.1;
     nbr_mesure++;
     delay(1);
     distance = mesureDistance();
   }
+  
+  Serial.print("Distance was found to be ");
+  Serial.print(moyenne_distance);
+  Serial.print(" after ");
+  Serial.print(nbr_mesure);
+  Serial.println(" measurements");
 
-  if (nbr_mesure>150 || moyenne_distance_temp > moyenne_distance+0.5|| moyenne_distance_temp < moyenne_distance-0.5){
+  if (nbr_mesure>150 || moyenne_distance > (previous_distance + distance_change_to_detect) || moyenne_distance < (previous_distance - distance_change_to_detect)){
     if (nbr_mesure>150){
       Serial.println("distance mesurment took "+String(nbr_mesure )+" iteration");
-    } else if (moyenne_distance_temp < moyenne_distance-0.5){
-      Serial.println("detected change");
-      time_since_last_mail = millis();
-      moyenne_distance = moyenne_distance_temp;
+    } else if (moyenne_distance < previous_distance-0.5){
+      Serial.print("Measured distance is more than ");
+      Serial.print(distance_change_to_detect);
+      Serial.println(" cm shorter than previous distance : a letter has been detected");
+      time_since_last_letter = millis();
+      previous_distance = moyenne_distance;
       return true;
     }
-    moyenne_distance = moyenne_distance_temp;
+    Serial.println();
+    previous_distance = moyenne_distance;
   }
   return false;
 }
