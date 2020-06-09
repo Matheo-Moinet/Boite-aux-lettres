@@ -1,0 +1,10 @@
+Every library used in this project is from the following GitHub project, which is under LGPL :
+https://github.com/esp8266/Arduino
+
+Each library can be found using the following links :
+https://github.com/esp8266/Arduino/tree/master/libraries/ESP8266WiFi
+	ESP8266WiFi.h
+	WiFiClientSecure.h
+
+https://github.com/esp8266/Arduino/blob/master/tools/sdk/include/wpa2_enterprise.h
+	wpa2_enterprise.h

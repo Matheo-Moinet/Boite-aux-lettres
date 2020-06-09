@@ -9,7 +9,8 @@
 const String url = "/trigger/" + trigger + "/with/key/" + key;
 
 
-int nbr_of_letters = 0;
+int nbr_of_new_letters = 0;
+int total_nbr_of_letters = 0;
 unsigned long time_since_last_letter = 0;
 bool letter_detected = false;
 
@@ -28,24 +29,25 @@ void setup() {
 void loop() {
 
   if ((millis() - time_since_last_letter) > time_between_two_letters_are_detected*1000 && isNewObjectDetected()) {
-    nbr_of_letters ++;
+    nbr_of_new_letters ++;
+    total_nbr_of_letters ++;
   }
 
   delay(time_between_two_measurements);
 
-  if (nbr_of_letters > 0) {
+  if (nbr_of_new_letters > 0) {
     Serial.print(" Weebhook will be triggered in ");
-    Serial.print(15-int((millis() - time_since_last_letter)/1000));
+    Serial.print(time_before_weebhook_is_triggered-int((millis() - time_since_last_letter)/1000));
     Serial.print("s, ");
-    Serial.print(nbr_of_letters);
+    Serial.print(nbr_of_new_letters);
     Serial.println(" letter(s) detected");
   }
 
-  while (nbr_of_letters > 0 && (millis() - time_since_last_letter) > time_before_weebhook_is_triggered * 1000 ) {
+  while (nbr_of_new_letters > 0 && (millis() - time_since_last_letter) > time_before_weebhook_is_triggered * 1000 ) {
     Serial.println("Starting weebhook triggering");
     if (sendIFTTTRequest()) {
       Serial.println("Weebhook triggered");
-      nbr_of_letters --;
+      nbr_of_new_letters = 0;
     } else {
       Serial.println("Failed to trigger weebhook, retrying in 2s");
     }
@@ -78,19 +80,26 @@ bool sendIFTTTRequest() {
     return false;
   }
 
-  Serial.print("Requesting URL: ");
+  Serial.print("Posting json to URL: ");
   Serial.println(url);
 
+  String json = "{\"value1\": "+ String(nbr_of_new_letters) +",\"value2\": "+ String(total_nbr_of_letters) +",\"value3\": 100}";
+  Serial.print("JSON content: ");
+  Serial.println(json);
+ 
   // This will send the request to the server
-  client.print(String("GET ") + url + " HTTP/1.1\r\n" +
+  client.print("POST " + url + " HTTP/1.1\r\n" +
                "Host: " + host + "\r\n" +
                "User-Agent: esp8266\r\n" +
-               "Connection: close\r\n\r\n");
+               //"Connection: close\r\n\r\n"+
+               "Content-Type: application/json\r\n" +
+               "Accept: */*\r\n"+
+               "Content-Length: "+json.length()+"\r\n"+
+               "\r\n" +
+               json);
   delay(500);
 
-  if (nbr_of_letters == 1) {
-    closeConnection(client);
-  }
+  closeConnection(client);
   return true;
 }
 
@@ -147,7 +156,7 @@ bool connectWifi() {
   }
 
   int cpt = 0;
-  Serial.print("Connecting  to Wifi");
+  Serial.print("Connecting  to Wifi ");
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
     Serial.print(".");
@@ -168,7 +177,7 @@ bool connectWifi() {
 }
 
 
-void closeConnection(WiFiClientSecure myClient) {
+void closeConnection(WiFiClient myClient) {
   myClient.stop();
   WiFi.disconnect();
   Serial.println("Wifi connection closed");
