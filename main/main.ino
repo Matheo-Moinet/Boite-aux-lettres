@@ -11,24 +11,28 @@ const String url = "/trigger/" + trigger + "/with/key/" + key;
 
 int nbr_of_new_letters = 0;
 int total_nbr_of_letters = 0;
-unsigned long time_since_last_letter = 0;
+unsigned long time_of_last_letter = 0;
 bool letter_detected = false;
 
 double previous_distance = 0;
 double distance_bottom = 0;
 
+WiFiClientSecure client;
 
 void setup() {
   Serial.begin(115200);
   pinMode(TRIG_PIN, OUTPUT);
   pinMode(ECHO_PIN, INPUT);
   wifi_station_set_auto_connect(0);
-  distance_bottom = mesureDistance();
+  distance_bottom = mesureDistance();  
+  WiFi.mode( WIFI_OFF );
+  WiFi.forceSleepBegin();
+  Serial.println("WiFi is down");
 }
 
 void loop() {
 
-  if ((millis() - time_since_last_letter) > time_between_two_letters_are_detected*1000 && isNewObjectDetected()) {
+  if ((millis() - time_of_last_letter) > time_between_two_letters_are_detected*1000 && isNewObjectDetected()) {
     nbr_of_new_letters ++;
     total_nbr_of_letters ++;
   }
@@ -36,23 +40,53 @@ void loop() {
   delay(time_between_two_measurements);
 
   if (nbr_of_new_letters > 0) {
-    Serial.print(" Weebhook will be triggered in ");
-    Serial.print(time_before_weebhook_is_triggered-int((millis() - time_since_last_letter)/1000));
-    Serial.print("s, ");
-    Serial.print(nbr_of_new_letters);
-    Serial.println(" letter(s) detected");
+    int time_temp = int(time_before_weebhook_is_triggered) - int((millis() - time_of_last_letter)/1000);
+    if (time_temp>=0){
+      Serial.print(" Weebhook will be triggered in ");
+      Serial.print(time_temp);
+      Serial.print("s, ");
+      Serial.print(nbr_of_new_letters);
+      Serial.println(" letter(s) detected");
+    } else {
+      Serial.println("Connection to WiFi is taking : "+ String(-time_temp) + "s");
+    }
   }
 
-  while (nbr_of_new_letters > 0 && (millis() - time_since_last_letter) > time_before_weebhook_is_triggered * 1000 ) {
-    Serial.println("Starting weebhook triggering");
-    if (sendIFTTTRequest()) {
-      Serial.println("Weebhook triggered");
-      nbr_of_new_letters = 0;
+  if (nbr_of_new_letters > 0 && (millis() - time_of_last_letter) > time_before_weebhook_is_triggered * 1000 ) {
+    
+    if (wifi_get_opmode() == WIFI_OFF ){
+      Serial.println("Starting WiFi connection");
+      connectWifi();
+    } else if (WiFi.status() == WL_CONNECTED){
+      Serial.println("WiFi connected");
+      Serial.print("IP address: ");
+      Serial.println(WiFi.localIP());
+      Serial.print("Netmask: ");
+      Serial.println(WiFi.subnetMask());
+      Serial.print("Gateway: ");
+      Serial.println(WiFi.gatewayIP());
+      Serial.println("Starting weebhook triggering");
+      if (sendIFTTTRequest()) {
+        Serial.println("Weebhook triggered");
+        nbr_of_new_letters = 0;
+      } else {
+        Serial.println("Failed to trigger weebhook, retrying in 2s");
+      }
+      delay(2000);
+      
     } else {
-      Serial.println("Failed to trigger weebhook, retrying in 2s");
+      Serial.print("CONNECTING TO WIFI : ");
+      Serial.println(wifi_station_get_connect_status() );
+      /*  STATION_IDLE  = 0,
+       *  STATION_CONNECTING = 1,
+       *  STATION_WRONG_PASSWORD = 2,
+       *  STATION_NO_AP_FOUND = 3,
+       *  STATION_CONNECT_FAIL = 4,
+       *  STATION_GOT_IP = 5
+       */
     }
-    delay(2000);
   }
+  Serial.println();
 }
 
 
@@ -60,13 +94,13 @@ void loop() {
 
 bool sendIFTTTRequest() {
   // Use WiFiClient class to create TCP connections
-  WiFiClientSecure client;
-  const int API_TIMEOUT = 10000;
-
+  //WiFiClientSecure client;
+  //const int API_TIMEOUT = 10000;
+  /*
   if (connectWifi() == false) {
     return false;
   }
-
+  */
   client.setInsecure();
 
   Serial.print("Connecting to ");
@@ -107,12 +141,17 @@ bool sendIFTTTRequest() {
 
 
 bool connectWifi() {
+  
   if (WiFi.status() == WL_CONNECTED) {
     return true;
   }
+
+  WiFi.forceSleepWake();
+  delay(1);
+  wifi_set_opmode_current(STATION_MODE);
+  
   if (WPA2_Entreprise_enabled) {
     wifi_station_disconnect();
-    wifi_set_opmode(STATION_MODE);
 
     struct station_config stationConf;
     stationConf.bssid_set = 0;  //need not check MAC address of AP
@@ -154,7 +193,7 @@ bool connectWifi() {
     wifi_station_set_wpa2_enterprise_auth(0);
     WiFi.begin(ssid, password);
   }
-
+  /*
   int cpt = 0;
   Serial.print("Connecting  to Wifi ");
   while (WiFi.status() != WL_CONNECTED) {
@@ -167,13 +206,8 @@ bool connectWifi() {
       return false;
     }
   }
-  Serial.println("WiFi connected");
-  Serial.print("IP address: ");
-  Serial.println(WiFi.localIP());
-  Serial.print("Netmask: ");
-  Serial.println(WiFi.subnetMask());
-  Serial.print("Gateway: ");
-  Serial.println(WiFi.gatewayIP());
+  
+  */
 }
 
 
@@ -181,6 +215,9 @@ void closeConnection(WiFiClient myClient) {
   myClient.stop();
   WiFi.disconnect();
   Serial.println("Wifi connection closed");
+  WiFi.mode( WIFI_OFF );
+  WiFi.forceSleepBegin();
+  Serial.println("WiFi is down");
 }
 
 
@@ -216,7 +253,7 @@ bool isNewObjectDetected() {
     last_10_distances[nbr_mesure % 10] = distance;
     nbr_mesure++;
     delayMicroseconds(1000);
-    Serial.println(moyenne_distance);
+    //Serial.println(moyenne_distance);
     distance = mesureDistance();
   }
 
@@ -236,7 +273,7 @@ bool isNewObjectDetected() {
         Serial.print("Measured distance is more than ");
         Serial.print(distance_change_to_detect);
         Serial.println(" cm shorter than previous distance : a letter has been detected");
-        time_since_last_letter = millis();
+        time_of_last_letter = millis();
         previous_distance = moyenne_distance;
         letter_detected = true;
         return true;
