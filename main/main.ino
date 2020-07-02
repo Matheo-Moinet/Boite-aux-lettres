@@ -5,6 +5,20 @@
 
 #define TRIG_PIN D3
 #define ECHO_PIN D5
+#define LED_PIN D8
+#define BUTTON_PIN D7
+
+#define LED_OFF 0
+#define LED_ON 1
+#define LED_BLINK 2
+#define LED_75_ON 3
+#define LED_25_ON 4
+#define LED_BLINK_HALF 5
+#define LED_BLINK_1T 6
+#define LED_BLINK_2T 7
+#define LED_BLINK_EVERY_10T 8
+#define LED_BLINK_XT 9
+
 
 const String url = "/trigger/" + trigger + "/with/key/" + key;
 
@@ -17,20 +31,42 @@ bool letter_detected = false;
 double previous_distance = 0;
 double distance_bottom = 0;
 
+int led_state = LED_BLINK;
+bool do_chip_reboot = false;
+
 WiFiClientSecure client;
 
 void setup() {
   Serial.begin(115200);
   pinMode(TRIG_PIN, OUTPUT);
   pinMode(ECHO_PIN, INPUT);
+  pinMode(BUTTON_PIN, INPUT);
+  pinMode(LED_PIN, OUTPUT);
+  digitalWrite(LED_PIN, HIGH);
   wifi_station_set_auto_connect(0);
   distance_bottom = mesureDistance();  
   WiFi.mode( WIFI_OFF );
   WiFi.forceSleepBegin();
   Serial.println("WiFi is down");
+  attachInterrupt(digitalPinToInterrupt(BUTTON_PIN), rebootChip, RISING);
+  do_chip_reboot = false;
+  timer1_isr_init();
+  timer1_attachInterrupt(ledInterrupt);
+  timer1_enable(TIM_DIV256, TIM_EDGE, TIM_LOOP);
+  timer1_write(1000);
 }
 
 void loop() {
+  delay(0); //To allow for background WiFi related operations to be performed
+
+  if (do_chip_reboot){
+    led_state = LED_OFF;
+    Serial.println("Button pressed, the chip will reboot in " + String(button_timer) + "s");
+    delay(button_timer*1000);
+    ESP.restart();
+    do_chip_reboot = false;
+  }
+
 
   if ((millis() - time_of_last_letter) > time_between_two_letters_are_detected*1000 && isNewObjectDetected()) {
     nbr_of_new_letters ++;
@@ -40,6 +76,7 @@ void loop() {
   delay(time_between_two_measurements);
 
   if (nbr_of_new_letters > 0) {
+    led_state = LED_75_ON ;
     int time_temp = int(time_before_weebhook_is_triggered) - int((millis() - time_of_last_letter)/1000);
     if (time_temp>=0){
       Serial.print(" Weebhook will be triggered in ");
@@ -50,14 +87,20 @@ void loop() {
     } else {
       Serial.println("Connection to WiFi is taking : "+ String(-time_temp) + "s");
     }
+  } else {
+    if (total_nbr_of_letters > 0){
+      led_state = LED_BLINK_2T ;
+    } else {
+      led_state = LED_BLINK_EVERY_10T ;
+    }
   }
 
   if (nbr_of_new_letters > 0 && (millis() - time_of_last_letter) > time_before_weebhook_is_triggered * 1000 ) {
-    
     if (wifi_get_opmode() == WIFI_OFF ){
       Serial.println("Starting WiFi connection");
       connectWifi();
     } else if (WiFi.status() == WL_CONNECTED){
+      led_state = LED_ON ;
       Serial.println("WiFi connected");
       Serial.print("IP address: ");
       Serial.println(WiFi.localIP());
@@ -73,8 +116,8 @@ void loop() {
         Serial.println("Failed to trigger weebhook, retrying in 2s");
       }
       delay(2000);
-      
     } else {
+      led_state = LED_BLINK_HALF ;
       Serial.print("CONNECTING TO WIFI : ");
       Serial.println(wifi_station_get_connect_status() );
       /*  STATION_IDLE  = 0,
@@ -122,10 +165,9 @@ bool sendIFTTTRequest() {
   Serial.println(json);
  
   // This will send the request to the server
-  client.print("POST " + url + " HTTP/1.1\r\n" +
+  client.print("GET " + url + " HTTP/1.1\r\n" +
                "Host: " + host + "\r\n" +
                "User-Agent: esp8266\r\n" +
-               //"Connection: close\r\n\r\n"+
                "Content-Type: application/json\r\n" +
                "Accept: */*\r\n"+
                "Content-Length: "+json.length()+"\r\n"+
@@ -193,21 +235,6 @@ bool connectWifi() {
     wifi_station_set_wpa2_enterprise_auth(0);
     WiFi.begin(ssid, password);
   }
-  /*
-  int cpt = 0;
-  Serial.print("Connecting  to Wifi ");
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-    cpt ++;
-    if (cpt > 100) {
-      Serial.println("Could not connect to Wifi");
-      WiFi.disconnect();
-      return false;
-    }
-  }
-  
-  */
 }
 
 
@@ -252,7 +279,7 @@ bool isNewObjectDetected() {
     moyenne_distance = moyenne_distance / 10;
     last_10_distances[nbr_mesure % 10] = distance;
     nbr_mesure++;
-    delayMicroseconds(1000);
+    delayMicroseconds(min_time_before_next_ultrasonic);
     //Serial.println(moyenne_distance);
     distance = mesureDistance();
   }
@@ -312,7 +339,85 @@ double mesureDistance() {
      Ob obtient alors la formule suivante :
 
      distance = (temps * 10^-6 * (20.05 * sqrt(298.15)) )/2 * 10^2
-     Simplifiable en :
-     distance = temps * 0.01731018814
+     Simplifiable en : distance = temps * 0.01731018814
   */
+}
+
+
+ICACHE_RAM_ATTR void ledInterrupt(){
+  static int led_cpt = 0;
+  led_cpt++;
+  led_cpt = led_cpt%led_timer_max;
+  static int nbr_repete = 0;
+  switch (led_state){
+    case LED_OFF :
+        digitalWrite(LED_PIN, LOW);
+      break;
+    case LED_ON :
+        digitalWrite(LED_PIN, HIGH);
+      break;
+    case LED_BLINK :
+      if (led_cpt > led_timer_max*0.5){
+        digitalWrite(LED_PIN, HIGH);
+      } else {
+        digitalWrite(LED_PIN, LOW);
+      }
+      break;
+    case LED_75_ON :
+      if (led_cpt < led_timer_max*0.75){
+        digitalWrite(LED_PIN, HIGH);
+      } else {
+        digitalWrite(LED_PIN, LOW);
+      }
+      break;
+    case LED_25_ON:
+      if (led_cpt < led_timer_max*0.25){
+        digitalWrite(LED_PIN, HIGH);
+      } else {
+        digitalWrite(LED_PIN, LOW);
+      }
+      break;
+    case LED_BLINK_HALF : 
+      if (led_cpt%(int(led_timer_max*0.5)) < led_timer_max*0.25){
+        digitalWrite(LED_PIN, HIGH);
+      } else {
+        digitalWrite(LED_PIN, LOW);
+      }
+      break;
+    case LED_BLINK_1T:
+      if (led_cpt < led_timer_max*0.05){
+        digitalWrite(LED_PIN, HIGH);
+      } else {
+        digitalWrite(LED_PIN, LOW);
+      }
+      break;
+    case LED_BLINK_2T:
+      if (led_cpt < led_timer_max*0.05 || (led_cpt > led_timer_max*0.10 && led_cpt < led_timer_max*0.15)){
+        digitalWrite(LED_PIN, HIGH);
+      } else {
+        digitalWrite(LED_PIN, LOW);
+      }
+      break;
+    case LED_BLINK_EVERY_10T :
+      if (led_cpt == 0){
+        nbr_repete +=1;
+      }
+      if (nbr_repete >=10){
+        if (led_cpt < led_timer_max*0.05){
+          digitalWrite(LED_PIN, HIGH);
+        } else {
+          digitalWrite(LED_PIN, LOW);
+          nbr_repete = 0;
+        }
+      }
+      break;
+    case LED_BLINK_XT :
+      //TODO
+      break;
+  }
+}
+
+
+ICACHE_RAM_ATTR void rebootChip(){
+  do_chip_reboot = true;
 }
